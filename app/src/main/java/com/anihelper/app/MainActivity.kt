@@ -20,9 +20,58 @@ class MainActivity : AppCompatActivity() {
         }
 
         val title = TextView(this).apply {
-            text = "Ани ✨"
-            textSize = 32f
+            text = "Ани — твоя помощница"
+            textSize = 26f
         }
 
         val description = TextView(this).apply {
-            text = "Твоя аниме-помощница\n\nНажми кнопку, чтобы Ани появилась поверх
+            text = "Нажми кнопку ниже, чтобы запустить Ани поверх других приложений."
+            textSize = 18f
+            setPadding(0, 40, 0, 40)
+        }
+
+        val startButton = Button(this).apply {
+            text = "Запустить Ани"
+
+            setOnClickListener {
+                if (!Settings.canDrawOverlays(this@MainActivity)) {
+
+                    val intent = Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    )
+
+                    startActivity(intent)
+
+                } else {
+
+                    val serviceIntent = Intent(
+                        this@MainActivity,
+                        FloatingAniService::class.java
+                    )
+
+                    startService(serviceIntent)
+                }
+            }
+        }
+
+        layout.addView(title)
+        layout.addView(description)
+        layout.addView(startButton)
+
+        setContentView(layout)
+    }
+
+    override fun onResume() {
+        super.onResume()
+
+        if (Settings.canDrawOverlays(this)) {
+            val serviceIntent = Intent(
+                this,
+                FloatingAniService::class.java
+            )
+
+            startService(serviceIntent)
+        }
+    }
+}
