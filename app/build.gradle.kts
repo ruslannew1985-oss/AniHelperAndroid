@@ -8,11 +8,12 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.anihelper.app2"
-        minSdk = 26
-        targetSdk = 35
-        versionCode = 2
-        versionName = "1.1"
+        applicationId = "com.anihelper.release"
+        minSdk = 23
+        targetSdk = 34
+
+        versionCode = 10
+        versionName = "1.0"
     }
 
     compileOptions {
@@ -22,6 +23,13 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            isShrinkResources = false
+        }
     }
 }
 
