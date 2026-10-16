@@ -10,6 +10,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.WindowManager
 import android.widget.ImageView
+import kotlin.math.abs
 import kotlin.random.Random
 
 class FloatingAniService : Service() {
@@ -22,6 +23,18 @@ class FloatingAniService : Service() {
 
     private var userDragging = false
     private var autoMoving = false
+    private var destroyed = false
+
+    private var walkFrame = 0
+
+    private val walkFrames by lazy {
+        intArrayOf(
+            R.drawable.yuki_walk1,
+            R.drawable.yuki_walk2,
+            R.drawable.yuki_walk3,
+            R.drawable.yuki_walk4
+        )
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -31,14 +44,9 @@ class FloatingAniService : Service() {
 
         yukiView = ImageView(this).apply {
             setImageResource(R.drawable.yuki)
-
-            // Почти непрозрачная
-            alpha = 0.97f
-
             scaleType = ImageView.ScaleType.FIT_CENTER
         }
 
-        // Размер Юки
         val size = dpToPx(180)
 
         params = WindowManager.LayoutParams(
@@ -55,19 +63,23 @@ class FloatingAniService : Service() {
 
         windowManager.addView(yukiView, params)
 
-        enableManualDragging()
+        enableTouch()
 
-        // Запускаем самостоятельное поведение Юки
-        scheduleNextWalk()
+        // Через небольшую паузу Юки начинает жить сама
+        handler.postDelayed({
+            scheduleNextAction()
+        }, 1500)
     }
 
-    private fun enableManualDragging() {
+    private fun enableTouch() {
 
         var startX = 0
         var startY = 0
 
         var touchX = 0f
         var touchY = 0f
+
+        var moved = false
 
         yukiView.setOnTouchListener { _, event ->
 
@@ -76,6 +88,7 @@ class FloatingAniService : Service() {
                 MotionEvent.ACTION_DOWN -> {
 
                     userDragging = true
+                    moved = false
 
                     startX = params.x
                     startY = params.y
@@ -88,18 +101,25 @@ class FloatingAniService : Service() {
 
                 MotionEvent.ACTION_MOVE -> {
 
-                    params.x =
-                        startX + (event.rawX - touchX).toInt()
+                    val dx = event.rawX - touchX
+                    val dy = event.rawY - touchY
 
-                    params.y =
-                        startY + (event.rawY - touchY).toInt()
+                    if (abs(dx) > 8 || abs(dy) > 8) {
+                        moved = true
+                    }
+
+                    params.x = startX + dx.toInt()
+                    params.y = startY + dy.toInt()
 
                     keepInsideScreen()
 
-                    windowManager.updateViewLayout(
-                        yukiView,
-                        params
-                    )
+                    try {
+                        windowManager.updateViewLayout(
+                            yukiView,
+                            params
+                        )
+                    } catch (_: Exception) {
+                    }
 
                     true
                 }
@@ -109,6 +129,13 @@ class FloatingAniService : Service() {
 
                     userDragging = false
 
+                    // Если палец почти не двигался — это тап
+                    if (!moved &&
+                        event.action == MotionEvent.ACTION_UP
+                    ) {
+                        wave()
+                    }
+
                     true
                 }
 
@@ -117,88 +144,211 @@ class FloatingAniService : Service() {
         }
     }
 
-    // Через случайное время Юки решает немного пройтись
-    private fun scheduleNextWalk() {
+    // Выбор следующего поведения
+    private fun scheduleNextAction() {
+
+        if (destroyed) return
 
         val delay =
-            Random.nextLong(10_000L, 30_000L)
+            Random.nextLong(2000L, 6000L)
 
         handler.postDelayed({
 
-            if (!userDragging && !autoMoving) {
-                startRandomWalk()
-            } else {
-                scheduleNextWalk()
+            if (destroyed) return@postDelayed
+
+            if (userDragging || autoMoving) {
+                scheduleNextAction()
+                return@postDelayed
+            }
+
+            when (Random.nextInt(100)) {
+
+                in 0..64 -> startRandomWalk()
+
+                in 65..84 -> sit()
+
+                else -> wave()
             }
 
         }, delay)
     }
 
+    // Начало прогулки
     private fun startRandomWalk() {
+
+        if (destroyed || userDragging) {
+            scheduleNextAction()
+            return
+        }
 
         autoMoving = true
 
-        // Куда идти
+        val screenWidth =
+            resources.displayMetrics.widthPixels
+
+        val viewWidth =
+            if (yukiView.width > 0)
+                yukiView.width
+            else
+                dpToPx(180)
+
+        val maxX =
+            (screenWidth - viewWidth)
+                .coerceAtLeast(0)
+
+        val targetX =
+            if (maxX > 0)
+                Random.nextInt(0, maxX + 1)
+            else
+                0
+
         val direction =
-            if (Random.nextBoolean()) 1 else -1
+            if (targetX >= params.x) 1 else -1
 
-        // Насколько далеко пройти
-        val distance =
-            Random.nextInt(
-                dpToPx(50),
-                dpToPx(140)
-            )
+        // Разворот персонажа
+        yukiView.scaleX =
+            if (direction > 0) 1f else -1f
 
-        var travelled = 0
+        walkFrame = 0
 
-        val step = dpToPx(2)
+        val movement =
+            object : Runnable {
 
-        val movement = object : Runnable {
+                override fun run() {
 
-            override fun run() {
+                    if (destroyed) return
 
-                if (userDragging) {
+                    if (userDragging) {
+                        autoMoving = false
+                        showIdle()
+                        scheduleNextAction()
+                        return
+                    }
 
-                    autoMoving = false
-                    scheduleNextWalk()
+                    val distance =
+                        targetX - params.x
 
-                    return
-                }
+                    if (abs(distance) <= dpToPx(4)) {
 
-                params.x += step * direction
+                        params.x = targetX
 
-                keepInsideScreen()
+                        updatePosition()
 
-                try {
-                    windowManager.updateViewLayout(
-                        yukiView,
-                        params
+                        autoMoving = false
+
+                        showIdle()
+
+                        // Иногда после прогулки садится
+                        if (Random.nextBoolean()) {
+                            handler.postDelayed({
+                                sit()
+                            }, 500)
+                        } else {
+                            scheduleNextAction()
+                        }
+
+                        return
+                    }
+
+                    val step = dpToPx(3)
+
+                    params.x +=
+                        if (distance > 0)
+                            step
+                        else
+                            -step
+
+                    keepInsideScreen()
+
+                    // Меняем кадры ног
+                    walkFrame =
+                        (walkFrame + 1) %
+                                walkFrames.size
+
+                    yukiView.setImageResource(
+                        walkFrames[walkFrame]
                     )
-                } catch (_: Exception) {
-                    return
-                }
 
-                travelled += step
+                    updatePosition()
 
-                if (travelled < distance) {
-
-                    // Скорость движения
                     handler.postDelayed(
                         this,
-                        35L
+                        110
                     )
-
-                } else {
-
-                    autoMoving = false
-
-                    // После прогулки снова отдыхает
-                    scheduleNextWalk()
                 }
             }
-        }
 
         handler.post(movement)
+    }
+
+    // Юки сидит
+    private fun sit() {
+
+        if (destroyed || userDragging) {
+            scheduleNextAction()
+            return
+        }
+
+        autoMoving = false
+
+        yukiView.scaleX = 1f
+        yukiView.setImageResource(
+            R.drawable.yuki_sit
+        )
+
+        handler.postDelayed({
+
+            if (!destroyed && !userDragging) {
+                showIdle()
+                scheduleNextAction()
+            }
+
+        }, Random.nextLong(2500L, 5500L))
+    }
+
+    // Юки машет при тапе
+    private fun wave() {
+
+        if (destroyed) return
+
+        autoMoving = false
+
+        yukiView.scaleX = 1f
+        yukiView.setImageResource(
+            R.drawable.yuki_wave
+        )
+
+        handler.postDelayed({
+
+            if (!destroyed && !userDragging) {
+                showIdle()
+                scheduleNextAction()
+            }
+
+        }, 1600)
+    }
+
+    private fun showIdle() {
+
+        if (destroyed) return
+
+        yukiView.scaleX = 1f
+        yukiView.setImageResource(
+            R.drawable.yuki
+        )
+    }
+
+    private fun updatePosition() {
+
+        if (destroyed) return
+
+        try {
+            windowManager.updateViewLayout(
+                yukiView,
+                params
+            )
+        } catch (_: Exception) {
+        }
     }
 
     private fun keepInsideScreen() {
@@ -239,11 +389,13 @@ class FloatingAniService : Service() {
     private fun dpToPx(dp: Int): Int {
         return (
             dp *
-            resources.displayMetrics.density
-        ).toInt()
+                resources.displayMetrics.density
+            ).toInt()
     }
 
     override fun onDestroy() {
+
+        destroyed = true
 
         handler.removeCallbacksAndMessages(null)
 
@@ -258,5 +410,7 @@ class FloatingAniService : Service() {
         super.onDestroy()
     }
 
-    override fun onBind(intent: Intent?): IBinder? = null
+    override fun onBind(
+        intent: Intent?
+    ): IBinder? = null
 }
