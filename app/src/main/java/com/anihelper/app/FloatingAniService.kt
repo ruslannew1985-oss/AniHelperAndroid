@@ -22,7 +22,7 @@ class FloatingAniService : Service() {
             text = "Ани"
             textSize = 18f
             setPadding(30, 20, 30, 20)
-            setBackgroundColor(0xCC7B2CBF.toInt())
+            setBackgroundColor(0xCC222222.toInt())
             setTextColor(0xFFFFFFFF.toInt())
         }
 
@@ -30,4 +30,26 @@ class FloatingAniService : Service() {
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-           
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT
+        )
+
+        params.gravity = Gravity.TOP or Gravity.END
+        params.x = 30
+        params.y = 200
+
+        windowManager.addView(floatingView, params)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+
+        if (::floatingView.isInitialized) {
+            windowManager.removeView(floatingView)
+        }
+    }
+
+    override fun onBind(intent: Intent?): IBinder? {
+        return null
+    }
+}
