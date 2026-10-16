@@ -23,11 +23,18 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Build Debug APK
+      - name: Build APK
         run: gradle assembleDebug
+
+      - name: Verify APK
+        run: |
+          $ANDROID_HOME/build-tools/35.0.0/apksigner verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Rename APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk AniHelper.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: AniHelper-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: AniHelper-APK
+          path: AniHelper.apk
