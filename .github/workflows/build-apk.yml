@@ -1,4 +1,4 @@
-name: Build Release APK
+name: Build Signed APK
 
 on:
   push:
@@ -26,12 +26,43 @@ jobs:
       - name: Build Release APK
         run: gradle assembleRelease
 
-      - name: Find Release APK
+      - name: Find Android SDK build-tools
+        id: buildtools
+        shell: bash
         run: |
-          find app/build/outputs/apk -type f -name "*.apk" -print
+          BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          echo "path=$BUILD_TOOLS" >> "$GITHUB_OUTPUT"
 
-      - name: Upload Release APK
+      - name: Create signing key
+        run: |
+          keytool -genkeypair \
+            -keystore anihelper.jks \
+            -storepass anihelper2026 \
+            -keypass anihelper2026 \
+            -alias anihelper \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=AniHelper, OU=Android, O=AniHelper, L=Moscow, C=RU"
+
+      - name: Sign APK
+        shell: bash
+        run: |
+          UNSIGNED_APK=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
+          "${{ steps.buildtools.outputs.path }}/zipalign" -f -p 4 "$UNSIGNED_APK" aligned.apk
+
+          "${{ steps.buildtools.outputs.path }}/apksigner" sign \
+            --ks anihelper.jks \
+            --ks-key-alias anihelper \
+            --ks-pass pass:anihelper2026 \
+            --key-pass pass:anihelper2026 \
+            --out AniHelper.apk \
+            aligned.apk
+
+          "${{ steps.buildtools.outputs.path }}/apksigner" verify --verbose AniHelper.apk
+
+      - name: Upload AniHelper APK
         uses: actions/upload-artifact@v4
         with:
-          name: AniHelper-Release
-          path: app/build/outputs/apk/release/*.apk
+          name: AniHelper-APK
+          path: AniHelper.apk
