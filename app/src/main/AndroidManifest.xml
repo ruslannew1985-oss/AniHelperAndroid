@@ -7,7 +7,7 @@
 
     <application
         android:allowBackup="true"
-        android:label="Ани"
+        android:label="@string/app_name"
         android:theme="@style/Theme.AniHelper">
 
         <activity
