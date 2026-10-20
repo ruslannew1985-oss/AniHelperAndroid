@@ -1,66 +1,64 @@
+import tempfile
 import unittest
-from bot import Bot, ApiError, extract_text
+from pathlib import Path
+from unittest.mock import patch
+from bot import Bot, load_config
 
-
-class BotTests(unittest.TestCase):
+class FreeBotTests(unittest.TestCase):
     def setUp(self):
         self.calls = []
-        self.fail = False
-        def request(url, data, **kwargs):
-            self.calls.append((url, data))
-            if url.endswith('/responses'):
-                if self.fail:
-                    raise ApiError('HTTP 429')
-                return {'output': [{'type': 'reasoning'}, {'type': 'message', 'content': [{'type': 'output_text', 'text': 'Ответ'}]}]}
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = str(Path(self.temp.name) / 'bot.db')
+        self.config = {'TELEGRAM_BOT_TOKEN': 'test', 'OWNER_ID': '123'}
+        def request(url, data):
+            self.assertTrue(url.startswith('https://api.telegram.org/bot'))
+            self.calls.append(data)
             return {'ok': True, 'result': {}}
-        self.bot = Bot({'TELEGRAM_BOT_TOKEN': 'test', 'OPENAI_API_KEY': 'test', 'OPENAI_MODEL': 'test', 'OWNER_ID': '123'}, ':memory:', request)
-        self.addCleanup(self.bot.db.close)
+        self.request = request
+        self.bot = Bot(self.config, self.path, request)
+        self.addCleanup(lambda: self.bot.db.close())
 
-    def message(self, text, uid=123, chat_type='private'):
-        self.bot.handle({'message': {'from': {'id': uid}, 'chat': {'id': uid, 'type': chat_type}, 'text': text}})
+    def message(self, text, uid=123, kind='private'):
+        self.bot.handle({'message': {'from': {'id': uid}, 'chat': {'id': uid, 'type': kind}, 'text': text}})
 
-    def test_access_denied_without_api_call(self):
-        self.message('привет', 456)
-        self.message('привет', chat_type='group')
+    def test_private_owner_only(self):
+        self.message('/note secret', 456)
+        self.message('/note secret', kind='group')
         self.assertEqual(self.calls, [])
+        self.assertEqual(self.bot.db.execute('SELECT COUNT(*) FROM items').fetchone()[0], 0)
 
-    def test_modes_have_separate_history_and_clear(self):
-        self.message('первый вопрос')
-        self.message('/gpt')
-        self.message('другой вопрос')
-        requests = [data for url, data in self.calls if url.endswith('/responses')]
-        self.assertEqual(len(requests[1]['input']), 1)
-        self.message('/new')
-        self.assertEqual(self.bot.get('history:gpt'), '[]')
-        self.assertIn('первый вопрос', self.bot.get('history:ronin'))
-        self.message('/forget')
-        self.assertEqual(self.bot.get('history:ronin'), '[]')
+    def test_notes_tasks_persist_and_delete(self):
+        self.message('➕ Заметка')
+        self.message('Купить плёнку')
+        self.message('/todo Проверить принтер')
+        self.bot.db.close()
+        self.bot = Bot(self.config, self.path, self.request)
+        self.message('/notes')
+        self.assertIn('Купить плёнку', self.calls[-1]['text'])
+        self.message('/done 2')
+        self.message('/todos')
+        self.assertIn('☑', self.calls[-1]['text'])
+        self.message('/delete 1')
+        self.message('/notes')
+        self.assertIn('пуст', self.calls[-1]['text'])
 
-    def test_error_does_not_save_or_retry(self):
-        self.fail = True
-        self.message('вопрос')
-        self.assertEqual(self.bot.get('history:ronin'), '')
-        self.assertEqual(sum(url.endswith('/responses') for url, _ in self.calls), 1)
-        self.assertIn('HTTP 429', self.calls[-1][1]['text'])
+    def test_no_paid_service_even_with_old_key(self):
+        self.bot.config['OPENAI_API_KEY'] = 'unused'
+        for text in ('/gpt', 'Расскажи историю', '/start', '/help'):
+            self.message(text)
+        self.assertEqual(len(self.calls), 4)
 
-    def test_long_emoji_answer_chunks(self):
-        text = '🥷' * 5000
-        self.bot.send(text)
-        chunks = [data['text'] for _, data in self.calls]
-        self.assertEqual(''.join(chunks), text)
-        self.assertTrue(all(len(c.encode('utf-16-le')) // 2 <= 4096 for c in chunks))
+    def test_cancel_and_empty_note(self):
+        self.message('➕ Заметка')
+        self.message('/cancel')
+        self.message('Не сохранять')
+        self.message('/note')
+        self.assertEqual(self.bot.db.execute('SELECT COUNT(*) FROM items').fetchone()[0], 0)
 
-    def test_bounded_history(self):
-        for _ in range(15):
-            self.message('вопрос')
-        import json
-        self.assertEqual(len(json.loads(self.bot.get('history:ronin'))), 20)
-
-    def test_refusal_and_empty_response(self):
-        self.assertEqual(extract_text({'output': [{'type': 'message', 'content': [{'type': 'refusal', 'refusal': 'Отказ'}]}]}), 'Отказ')
-        with self.assertRaises(ApiError):
-            extract_text({'output': []})
-
+    def test_config_needs_no_openai_key(self):
+        with patch('bot.CONFIG', Path(self.temp.name) / 'missing'), patch.dict('os.environ', self.config, clear=True):
+            self.assertEqual(load_config(), self.config)
 
 if __name__ == '__main__':
     unittest.main()
