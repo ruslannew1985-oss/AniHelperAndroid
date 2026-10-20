@@ -1,4 +1,4 @@
-"""Private Ronin/GPT Telegram chat. Python 3.10+, standard library only."""
+"""Private Ronin Telegram utility bot. No AI services. Python 3.10+, standard library only."""
 import getpass
 import json
 import os
@@ -10,27 +10,24 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parent
 CONFIG = ROOT / '.env'
-KEYBOARD = {'keyboard': [['🥷 Ронин', '💬 GPT'], ['🧹 Новый диалог']], 'resize_keyboard': True}
-PROMPTS = {
-    'ronin': 'Ты Ронин, личный ИИ-помощник в образе спокойного самурая в маске. '
-             'Общайся по-русски, на ты, ясно и по делу, без театральности. '
-             'Ты работаешь через GPT API в Telegram. У тебя нет доступа к телефону, '
-             'Android-приложению, другим чатам, файлам или интернет-поиску. '
-             'Не утверждай, что выполнил действие, которое не можешь выполнить.',
-    'gpt': 'Ты полезный ИИ-помощник GPT. Отвечай по-русски, если не просят иначе. '
-           'Объясняй понятно и честно. У тебя нет инструментов управления телефоном '
-           'или доступа к истории аккаунта ChatGPT и интернет-поиску.',
-}
+KEYBOARD = {'keyboard': [['📝 Заметки', '✅ Дела'], ['➕ Заметка', '➕ Дело'], ['❓ Помощь']], 'resize_keyboard': True}
+HELP = ('🥷 Я Ронин. Работаю без GPT и платных ИИ-сервисов.\n'
+        '📝 Заметки — посмотреть сохранённое.\n'
+        '✅ Дела — список задач.\n'
+        '/note текст — сохранить заметку\n'
+        '/todo текст — добавить дело\n'
+        '/done номер — отметить дело выполненным\n'
+        '/delete номер — удалить заметку\n'
+        '/cancel — отменить ввод\n'
+        'Свободный ИИ-диалог и управление телефоном пока не подключены.')
 
 
 class ApiError(Exception):
     pass
 
 
-def post(url, data, key=None, timeout=120):
+def post(url, data, timeout=120):
     headers = {'Content-Type': 'application/json'}
-    if key:
-        headers['Authorization'] = 'Bearer ' + key
     req = urllib.request.Request(url, json.dumps(data).encode(), headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as response:
@@ -49,8 +46,9 @@ def load_config():
             if line.strip() and not line.lstrip().startswith('#'):
                 k, v = line.split('=', 1)
                 values[k.strip()] = v.strip()
-    for key in ('TELEGRAM_BOT_TOKEN', 'OPENAI_API_KEY', 'OPENAI_MODEL', 'OWNER_ID'):
+    for key in ('TELEGRAM_BOT_TOKEN', 'OWNER_ID'):
         values[key] = os.environ.get(key, values.get(key, ''))
+    values = {k: values[k] for k in ('TELEGRAM_BOT_TOKEN', 'OWNER_ID')}
     if not all(values.values()) or not values['OWNER_ID'].isdigit() or int(values['OWNER_ID']) <= 0:
         raise ValueError('Сначала запустите: python3 bot.py --setup')
     return values
@@ -60,31 +58,12 @@ def setup():
     if CONFIG.exists():
         raise ValueError('.env уже существует. Отредактируйте его локально для смены настроек.')
     token = getpass.getpass('Токен Telegram от BotFather (ввод скрыт): ').strip()
-    key = getpass.getpass('OpenAI API key (ввод скрыт): ').strip()
-    model = input('Модель из вашего OpenAI API проекта: ').strip()
     owner = input('Ваш числовой Telegram user ID: ').strip()
-    if not token or not key or not model or not owner.isdigit() or int(owner) <= 0:
+    if not token or not owner.isdigit() or int(owner) <= 0:
         raise ValueError('Все поля обязательны; ID должен быть положительным числом.')
     with os.fdopen(os.open(CONFIG, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w') as file:
-        file.write(f'TELEGRAM_BOT_TOKEN={token}\nOPENAI_API_KEY={key}\nOPENAI_MODEL={model}\nOWNER_ID={owner}\n')
+        file.write(f'TELEGRAM_BOT_TOKEN={token}\nOWNER_ID={owner}\n')
     print('Настройки сохранены. Запуск: python3 bot.py')
-
-
-def extract_text(response):
-    texts = []
-    for item in response.get('output', []):
-        if item.get('type') == 'message':
-            for part in item.get('content', []):
-                if part.get('type') == 'output_text':
-                    texts.append(part['text'])
-                elif part.get('type') == 'refusal':
-                    texts.append(part['refusal'])
-    text = '\n'.join(texts).strip()
-    if not text:
-        raise ApiError('Модель не вернула текст')
-    if response.get('status') == 'incomplete':
-        text += '\n[Ответ прерван лимитом генерации.]'
-    return text
 
 
 class Bot:
@@ -93,6 +72,7 @@ class Bot:
         self.db = sqlite3.connect(db_path)
         self.db.execute('PRAGMA secure_delete=ON')
         self.db.execute('CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT)')
+        self.db.execute('CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, text TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0)')
         self.db.commit()
 
     def get(self, key, default=''):
@@ -121,42 +101,59 @@ class Bot:
         if msg.get('from', {}).get('id') != owner or msg.get('chat', {}).get('id') != owner or msg.get('chat', {}).get('type') != 'private':
             return
         text = msg.get('text', '').strip()
-        mode = self.get('mode', 'ronin')
-        if text in ('/start', '/help'):
-            self.send('Выбери Ронина или GPT и напиши сообщение. Оба режима используют GPT API, '
-                      'истории раздельные. Ронин здесь — образ помощника; управление телефоном '
-                      'не подключено. /new — очистить текущий диалог; /forget — оба. '
-                      'Текст и последние 10 пар сообщений отправляются в OpenAI. '
-                      'Фотографии и голос пока не поддерживаются.')
-        elif text in ('🥷 Ронин', '/ronin', '💬 GPT', '/gpt'):
-            mode = 'ronin' if text in ('🥷 Ронин', '/ronin') else 'gpt'
-            self.set('mode', mode)
-            self.send('Режим: ' + ('🥷 Ронин' if mode == 'ronin' else '💬 GPT'))
-        elif text in ('🧹 Новый диалог', '/new', '/forget'):
-            for target in (PROMPTS if text == '/forget' else (mode,)):
-                self.set('history:' + target, '[]')
-            self.send('История очищена.' if text == '/forget' else 'Начинаем новый диалог.')
-        elif not text:
-            self.send('Пока принимаю только текст. Напиши свой вопрос.')
-        elif text.startswith('/'):
-            self.send('Команды: /ronin, /gpt, /new, /forget, /help')
-        elif len(text) > 12000:
-            self.send('Сократи сообщение до 12000 символов.')
-        else:
-            history = json.loads(self.get('history:' + mode, '[]'))
-            messages = history + [{'role': 'user', 'content': text}]
-            try:
-                response = self.request('https://api.openai.com/v1/responses', {
-                    'model': self.config['OPENAI_MODEL'], 'instructions': PROMPTS[mode],
-                    'input': messages, 'store': False, 'max_output_tokens': 2048,
-                }, key=self.config['OPENAI_API_KEY'])
-                answer = extract_text(response)
-            except ApiError as error:
-                self.send('Не удалось получить ответ: ' + str(error) +
-                          '. Проверь ключ, баланс API, доступ к модели и соединение. Повтори вопрос.')
+        if text in ('/start', '/help', '❓ Помощь'):
+            self.set('pending', '')
+            self.send(HELP)
+        elif text in ('📝 Заметки', '/notes', '✅ Дела', '/todos'):
+            self.set('pending', '')
+            kind = 'note' if text in ('📝 Заметки', '/notes') else 'todo'
+            rows = self.db.execute('SELECT id, text, done FROM items WHERE kind=? ORDER BY id', (kind,)).fetchall()
+            self.send('\n'.join(f'{i}. ' + ('☑ ' if done else '') + value for i, value, done in rows) if rows else 'Пока список пуст.')
+        elif text in ('➕ Заметка', '➕ Дело'):
+            self.set('pending', 'note' if text == '➕ Заметка' else 'todo')
+            self.send('Пришли текст одним сообщением. Отмена: /cancel')
+        elif text == '/cancel':
+            self.set('pending', '')
+            self.send('Ввод отменён.')
+        elif text.split(' ', 1)[0] in ('/done', '/delete'):
+            command, _, arg = text.partition(' ')
+            if not arg.strip().isdigit():
+                self.send('Укажи номер из списка: /done 3 или /delete 2')
                 return
-            self.set('history:' + mode, json.dumps((messages + [{'role': 'assistant', 'content': answer}])[-20:], ensure_ascii=False))
-            self.send(answer)
+            number = int(arg.strip()) if len(arg.strip()) < 19 else 0
+            with self.db:
+                if command == '/done':
+                    cursor = self.db.execute("UPDATE items SET done=1 WHERE id=? AND kind='todo' AND done=0", (number,))
+                else:
+                    cursor = self.db.execute("DELETE FROM items WHERE id=? AND kind='note'", (number,))
+            self.send('Готово.' if cursor.rowcount else 'Номер не найден или дело уже выполнено.')
+        elif text in ('/gpt', '💬 GPT'):
+            self.send('GPT отключён. Платных ИИ-запросов нет. Нажми «Помощь».')
+        elif not text:
+            self.send('Пока принимаю только текст.')
+        else:
+            command, _, body = text.partition(' ')
+            kind = command[1:] if command in ('/note', '/todo') else self.get('pending')
+            if text.startswith('/') and command not in ('/note', '/todo'):
+                self.send('Неизвестная команда. Нажми «Помощь».')
+                return
+            if kind:
+                value = body.strip() if command in ('/note', '/todo') else text
+                if not value or len(value) > 4000:
+                    self.send('Нужен текст от 1 до 4000 символов.')
+                    return
+                count = self.db.execute('SELECT COUNT(*) FROM items WHERE kind=?', (kind,)).fetchone()[0]
+                if count >= 100:
+                    self.send('Лимит — 100 записей в списке. Для заметок используй /delete номер.')
+                    return
+                with self.db:
+                    cursor = self.db.execute('INSERT INTO items(kind,text) VALUES (?,?)', (kind, value))
+                self.set('pending', '')
+                self.send('Сохранено, номер ' + str(cursor.lastrowid) + '.')
+            elif text.lower().rstrip('!.,') in ('привет', 'привет ронин', 'здравствуй'):
+                self.send('Привет! 🥷 Я на связи. Могу сохранить заметку или дело — выбери кнопку.')
+            else:
+                self.send('Я пока работаю по командам, без ИИ. Чтобы сохранить этот текст, нажми «➕ Заметка» и отправь его ещё раз.')
 
     def run(self):
         self.tg('getMe')
@@ -168,7 +165,7 @@ class Bot:
                 updates = self.tg('getUpdates', offset=int(self.get('offset', '0')),
                                   timeout=30, allowed_updates=['message'])
                 for update in updates:
-                    # At-most-once processing avoids duplicate paid requests after restart.
+                    # At-most-once processing avoids duplicate notes after restart.
                     # A crash during processing can lose this one incoming message.
                     self.set('offset', str(update['update_id'] + 1))
                     self.handle(update)
