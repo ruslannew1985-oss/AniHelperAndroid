@@ -11,9 +11,8 @@ android {
         applicationId = "com.anihelper.release"
         minSdk = 23
         targetSdk = 34
-
-        versionCode = 10
-        versionName = "1.0"
+        versionCode = 11
+        versionName = "1.1-agent"
     }
 
     compileOptions {
@@ -21,9 +20,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
-    }
+    kotlinOptions { jvmTarget = "17" }
 
     buildTypes {
         release {
