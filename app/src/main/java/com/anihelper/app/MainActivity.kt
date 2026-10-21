@@ -1,100 +1,315 @@
 package com.anihelper.app
 
-import android.content.Intent
 import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
-import android.provider.AlarmClock
-import android.provider.Settings
-import android.speech.RecognizerIntent
-import android.view.Gravity
+import android.text.Editable
+import android.text.TextWatcher
+import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
-import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
-import java.net.URLEncoder
-import java.text.SimpleDateFormat
-import java.util.*
+import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
-    private lateinit var input: EditText
-    private lateinit var answer: TextView
-    private lateinit var tokenInput: EditText
-    private lateinit var tgStatus: TextView
-    private val voiceRequest = 1001
-    @Volatile private var telegramRunning = false
-    private var updateOffset = 0L
+
+    data class Lesson(val title: String, val rule: String, val examples: List<String>)
+    data class Subject(val name: String, val emoji: String, val description: String, val lessons: List<Lesson>)
+
+    private lateinit var root: LinearLayout
+    private val subjects by lazy { buildSubjects() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        title = "Ронин"
-        BirthdayData.schedule(this)
-        val prefs = getSharedPreferences("ronin", MODE_PRIVATE)
-        val content = LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setPadding(40,60,40,40); setBackgroundColor(Color.rgb(15,15,18)) }
-        content.addView(TextView(this).apply { text="浪人  РОНИН"; textSize=34f; setTextColor(Color.WHITE); gravity=Gravity.CENTER_HORIZONTAL })
-        content.addView(TextView(this).apply { text="Твой самурай-агент"; textSize=18f; setTextColor(Color.rgb(220,40,40)); gravity=Gravity.CENTER_HORIZONTAL; setPadding(0,8,0,30) })
-        answer=TextView(this).apply { text="Я Ронин. Назови задачу."; textSize=17f; setTextColor(Color.LTGRAY); setPadding(0,10,0,25) }; content.addView(answer)
-        input=EditText(this).apply { hint="Например: ближайшие дни рождения"; setHintTextColor(Color.GRAY); setTextColor(Color.WHITE); minLines=2 }; content.addView(input)
-        content.addView(Button(this).apply { text="ВЫПОЛНИТЬ"; setOnClickListener { executeCommand(input.text.toString(),true) } })
-        content.addView(Button(this).apply { text="🎤 ГОЛОСОВАЯ КОМАНДА"; setOnClickListener { startVoiceInput() } })
-        content.addView(Button(this).apply { text="НАСТРОЙКИ ТЕЛЕФОНА"; setOnClickListener { startActivity(Intent(Settings.ACTION_SETTINGS)) } })
-        content.addView(TextView(this).apply { text="\nTELEGRAM"; textSize=18f; setTextColor(Color.WHITE) })
-        tokenInput=EditText(this).apply { hint="Вставь новый токен BotFather"; setHintTextColor(Color.GRAY); setTextColor(Color.WHITE); setSingleLine(true); inputType=0x81; setText(prefs.getString("tg_token","")) }; content.addView(tokenInput)
-        tgStatus=TextView(this).apply { text="Telegram: отключён"; setTextColor(Color.LTGRAY;); setPadding(0,8,0,8) }; content.addView(tgStatus)
-        content.addView(Button(this).apply { text="ПОДКЛЮЧИТЬ TELEGRAM"; setOnClickListener { val t=tokenInput.text.toString().trim(); if(t.isBlank()) tgStatus.text="Вставь токен BotFather" else { prefs.edit().putString("tg_token",t).apply(); BirthdayData.schedule(this@MainActivity); startTelegram(t) } } })
-        content.addView(Button(this).apply { text="ОТКЛЮЧИТЬ TELEGRAM"; setOnClickListener { telegramRunning=false; tgStatus.text="Telegram: отключён" } })
-        content.addView(TextView(this).apply { text="\nРонин • локальный Android-агент"; textSize=14f; setTextColor(Color.DKGRAY); gravity=Gravity.CENTER_HORIZONTAL })
-        setContentView(ScrollView(this).apply { addView(content) })
+        window.statusBarColor = Color.rgb(238, 244, 255)
+        window.navigationBarColor = Color.WHITE
+        showHome()
     }
 
-    private fun executeCommand(raw:String,local:Boolean):String {
-        val c=raw.trim().lowercase(Locale.getDefault())
-        if(c.isBlank()){ if(local) answer.text="Назови задачу."; return "Назови задачу." }
-        val minutes=Regex("(\\d+)\\s*(мин|минут|минуты)").find(c)?.groupValues?.get(1)?.toIntOrNull()
-        val now=Date()
-        val r=when {
-            c=="/start"||c=="старт" -> "Ронин на связи ⚔️\nНапиши /help, чтобы увидеть возможности."
-            c=="/help"||c.contains("что ты умеешь")||c=="помощь" -> "Команды:\n• время / дата\n• погода Мытищи\n• ближайшие дни рождения\n• дни рождения\n• кто родился в мае\n• когда день рождения у Насти\n• таймер 10 минут (в приложении)"
-            c.contains("ближайш")&&c.contains("рожд") -> nearestBirthdays()
-            c=="дни рождения"||c=="/birthdays" -> allBirthdays()
-            c.startsWith("кто родился в ") -> birthdaysInMonth(c.removePrefix("кто родился в ").trim())
-            c.contains("когда день рождения у ") -> findBirthday(c.substringAfter("когда день рождения у ").trim())
-            c=="привет"||c.contains("привет ронин") -> "Привет. Ронин на связи ⚔️"
-            c=="время"||c.contains("который час")||c.contains("сколько времени") -> "Сейчас ${SimpleDateFormat("HH:mm",Locale("ru","RU")).format(now)}."
-            c=="дата"||c.contains("сегодня число")||c.contains("сегодня дата") -> "Сегодня ${SimpleDateFormat("d MMMM yyyy, EEEE",Locale("ru","RU")).format(now)}."
-            c.contains("погод") -> getWeather(c)
-            c.contains("таймер")&&minutes!=null -> {
-                if(local){ val i=Intent(AlarmClock.ACTION_SET_TIMER).apply { putExtra(AlarmClock.EXTRA_LENGTH,minutes*60); putExtra(AlarmClock.EXTRA_MESSAGE,"Ронин"); putExtra(AlarmClock.EXTRA_SKIP_UI,false) }; if(i.resolveActivity(packageManager)!=null) startActivity(i) }
-                if(local) "Принято. Таймер на $minutes мин." else "Таймер Android запускается из приложения Ронин на телефоне."
-            }
-            c.contains("настрой") -> { if(local){ startActivity(Intent(Settings.ACTION_SETTINGS)); "Открываю настройки." } else "Настройки телефона открываются из приложения Ронин." }
-            c.contains("спасибо") -> "Всегда к услугам. ⚔️"
-            c.contains("кто ты") -> "Я Ронин — твой Android-помощник и Telegram-бот."
-            else -> "Пока не знаю, как выполнить: «$raw». Напиши /help."
+    private fun showHome() {
+        root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(18), dp(16), dp(32))
+            setBackgroundColor(Color.rgb(246, 249, 255))
         }
-        if(local) answer.text=r
-        return r
+
+        root.addView(titleText("🎓 Школьник 6 класс", 30f))
+        root.addView(bodyText("Краткий справочник без интернета: правила, формулы и по 3 примера к каждой теме.").apply {
+            setPadding(0, dp(6), 0, dp(14))
+        })
+
+        val search = EditText(this).apply {
+            hint = "Поиск: проценты, глагол, клетка…"
+            textSize = 16f
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            background = rounded(Color.WHITE, 18)
+            setSingleLine(true)
+        }
+        root.addView(search, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(14) })
+
+        val container = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        root.addView(container)
+
+        fun render(query: String) {
+            container.removeAllViews()
+            val q = query.trim().lowercase(Locale.getDefault())
+            if (q.isBlank()) {
+                subjects.forEach { subject -> container.addView(subjectCard(subject)) }
+            } else {
+                var found = 0
+                subjects.forEach { subject ->
+                    subject.lessons.filter {
+                        it.title.lowercase().contains(q) || it.rule.lowercase().contains(q) || subject.name.lowercase().contains(q)
+                    }.forEach { lesson ->
+                        found++
+                        container.addView(searchResultCard(subject, lesson))
+                    }
+                }
+                if (found == 0) container.addView(bodyText("Ничего не найдено. Попробуй другое слово."))
+            }
+        }
+
+        search.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { render(s?.toString().orEmpty()) }
+            override fun afterTextChanged(s: Editable?) {}
+        })
+
+        render("")
+        setContentView(ScrollView(this).apply { addView(root) })
     }
 
-    private val monthNames=listOf("января","февраля","марта","апреля","мая","июня","июля","августа","сентября","октября","ноября","декабря")
-    private fun allBirthdays()=BirthdayData.all.sortedWith(compareBy<Birthday>{it.month}.thenBy{it.day}).joinToString("\n") { "${it.day} ${monthNames[it.month-1]} — ${it.name}" }
-    private fun birthdaysInMonth(q:String):String { val stems=listOf("январ","феврал","март","апрел","ма","июн","июл","август","сентябр","октябр","ноябр","декабр"); val m=stems.indexOfFirst{q.startsWith(it)}+1; if(m==0)return "Не понял месяц."; val a=BirthdayData.all.filter{it.month==m}; return if(a.isEmpty()) "В этом месяце дней рождения нет." else a.joinToString("\n"){"${it.day} ${monthNames[m-1]} — ${it.name}"} }
-    private fun findBirthday(q:String):String { val b=BirthdayData.all.find{it.name.lowercase().contains(q)||q.contains(it.name.lowercase())}; return if(b==null) "Не нашёл $q в списке." else "${b.name}: ${b.day} ${monthNames[b.month-1]}." }
-    private fun nearestBirthdays():String {
-        val now=Calendar.getInstance()
-        val year=now.get(Calendar.YEAR)
-        val list=BirthdayData.all.map { b ->
-            val d=Calendar.getInstance().apply { set(year,b.month-1,b.day,0,0,0); set(Calendar.MILLISECOND,0) }
-            if(d.before(now)) d.add(Calendar.YEAR,1)
-            Pair(b,d)
-        }.sortedBy { it.second.timeInMillis }.take(5)
-        return "Ближайшие дни рождения:\n"+list.joinToString("\n") { "${it.first.day} ${monthNames[it.first.month-1]} — ${it.first.name}" }
+    private fun subjectCard(subject: Subject): View {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(16), dp(18), dp(16))
+            background = rounded(Color.WHITE, 20)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { showSubject(subject) }
+            addView(titleText("${subject.emoji} ${subject.name}", 21f))
+            addView(bodyText(subject.description).apply { setPadding(0, dp(5), 0, dp(4)) })
+            addView(smallText("Тем: ${subject.lessons.size}  •  открыть →"))
+            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) }
+        }
     }
-    private fun getWeather(c:String):String=try { val m=c.contains("моск"); val j=JSONObject(httpGet("https://api.open-meteo.com/v1/forecast?latitude=${if(m) "55.7558" else "55.9116"}&longitude=${if(m) "37.6173" else "37.7308"}&current=temperature_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m&timezone=Europe%2FMoscow")); val x=j.getJSONObject("current"); "Сейчас в ${if(m) "Москве" else "Мытищах"}: ${x.optDouble("temperature_2m")}°C, ощущается ${x.optDouble("apparent_temperature")}°C, ветер ${x.optDouble("wind_speed_10m")} км/ч." } catch(_:Exception){ "Не удалось получить погоду. Проверь интернет." }
-    private fun startTelegram(token:String){ if(telegramRunning)return; telegramRunning=true; tgStatus.text="Telegram: подключение…"; Thread { try { if(!JSONObject(httpGet("https://api.telegram.org/bot$token/getMe")).optBoolean("ok")) throw Exception("Неверный токен"); runOnUiThread{tgStatus.text="Telegram: подключён ✓"}; while(telegramRunning){ try { val arr=JSONObject(httpGet("https://api.telegram.org/bot$token/getUpdates?timeout=25&offset=$updateOffset")).optJSONArray("result")?:continue; for(i in 0 until arr.length()){ val u=arr.getJSONObject(i); updateOffset=u.optLong("update_id")+1; val msg=u.optJSONObject("message")?:continue; val text=msg.optString("text",""); val chat=msg.optJSONObject("chat")?.optLong("id")?:continue; getSharedPreferences("ronin",MODE_PRIVATE).edit().putLong("tg_chat_id",chat).apply(); if(text.isNotBlank())sendTelegram(token,chat,executeCommand(text,false)) } } catch(_:Exception){ runOnUiThread{tgStatus.text="Telegram: нет сети, переподключаюсь…"}; Thread.sleep(5000) } } } catch(e:Exception){ telegramRunning=false; runOnUiThread{tgStatus.text="Telegram: ошибка — ${e.message?:"нет связи"}"} } }.start() }
-    private fun httpGet(a:String):String { val c=URL(a).openConnection() as HttpURLConnection; c.connectTimeout=15000; c.readTimeout=35000; return c.inputStream.bufferedReader().use{it.readText()} }
-    private fun sendTelegram(t:String,id:Long,text:String){ httpGet("https://api.telegram.org/bot$t/sendMessage?chat_id=$id&text=${URLEncoder.encode(text,"UTF-8")}") }
-    private fun startVoiceInput(){ val i=Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply { putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,RecognizerIntent.LANGUAGE_MODEL_FREE_FORM); putExtra(RecognizerIntent.EXTRA_LANGUAGE,"ru-RU") }; try{startActivityForResult(i,voiceRequest)}catch(_:Exception){answer.text="Голосовой ввод недоступен."} }
-    @Deprecated("Deprecated in Java") override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?){ super.onActivityResult(requestCode,resultCode,data); if(requestCode==voiceRequest&&resultCode==RESULT_OK){ val t=data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull().orEmpty(); input.setText(t); executeCommand(t,true) } }
-    override fun onDestroy(){ telegramRunning=false; super.onDestroy() }
+
+    private fun searchResultCard(subject: Subject, lesson: Lesson): View {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            background = rounded(Color.WHITE, 18)
+            isClickable = true
+            setOnClickListener { showSubject(subject) }
+            addView(smallText("${subject.emoji} ${subject.name}"))
+            addView(titleText(lesson.title, 19f))
+            addView(bodyText(lesson.rule).apply { maxLines = 3 })
+            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) }
+        }
+    }
+
+    private fun showSubject(subject: Subject) {
+        val page = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(16), dp(16), dp(32))
+            setBackgroundColor(Color.rgb(246, 249, 255))
+        }
+
+        val back = Button(this).apply {
+            text = "← Все предметы"
+            isAllCaps = false
+            setOnClickListener { showHome() }
+        }
+        page.addView(back, LinearLayout.LayoutParams(-2, -2).apply { bottomMargin = dp(10) })
+        page.addView(titleText("${subject.emoji} ${subject.name}", 29f))
+        page.addView(bodyText(subject.description).apply { setPadding(0, dp(4), 0, dp(12)) })
+
+        subject.lessons.forEachIndexed { index, lesson ->
+            page.addView(lessonCard(index + 1, lesson))
+        }
+
+        setContentView(ScrollView(this).apply { addView(page) })
+    }
+
+    private fun lessonCard(number: Int, lesson: Lesson): View {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(16), dp(18), dp(16))
+            background = rounded(Color.WHITE, 20)
+            addView(smallText("ТЕМА $number"))
+            addView(titleText(lesson.title, 21f).apply { setPadding(0, dp(3), 0, dp(8)) })
+            addView(labelText("Правило / формула"))
+            addView(bodyText(lesson.rule).apply { setPadding(0, dp(4), 0, dp(10)) })
+            addView(labelText("3 примера"))
+            lesson.examples.forEachIndexed { i, example ->
+                addView(bodyText("${i + 1}. $example").apply { setPadding(0, dp(5), 0, 0) })
+            }
+            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) }
+        }
+    }
+
+    private fun titleText(text: String, size: Float) = TextView(this).apply {
+        this.text = text
+        textSize = size
+        setTextColor(Color.rgb(25, 42, 78))
+        setTypeface(typeface, Typeface.BOLD)
+    }
+
+    private fun bodyText(text: String) = TextView(this).apply {
+        this.text = text
+        textSize = 16f
+        setTextColor(Color.rgb(45, 54, 70))
+        setLineSpacing(0f, 1.15f)
+    }
+
+    private fun smallText(text: String) = TextView(this).apply {
+        this.text = text
+        textSize = 13f
+        setTextColor(Color.rgb(90, 110, 150))
+    }
+
+    private fun labelText(text: String) = TextView(this).apply {
+        this.text = text
+        textSize = 14f
+        setTextColor(Color.rgb(43, 92, 180))
+        setTypeface(typeface, Typeface.BOLD)
+    }
+
+    private fun rounded(color: Int, radiusDp: Int) = GradientDrawable().apply {
+        setColor(color)
+        cornerRadius = dp(radiusDp).toFloat()
+        setStroke(dp(1), Color.rgb(222, 231, 247))
+    }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    private fun buildSubjects(): List<Subject> = listOf(
+        Subject("Математика", "➗", "Главные правила и формулы 6 класса с пошаговыми решениями.", listOf(
+            Lesson("Признаки делимости", "На 2 — последняя цифра чётная. На 3 — сумма цифр делится на 3. На 5 — число оканчивается на 0 или 5. На 9 — сумма цифр делится на 9.", listOf(
+                "246 делится на 2, потому что последняя цифра 6 — чётная.",
+                "372 делится на 3: 3 + 7 + 2 = 12, а 12 делится на 3.",
+                "4 815 делится на 5 и на 9: оканчивается на 5; 4 + 8 + 1 + 5 = 18."
+            )),
+            Lesson("НОД и НОК", "НОД — наибольший общий делитель. НОК — наименьшее общее кратное. Для двух чисел: НОД(a,b) · НОК(a,b) = a · b.", listOf(
+                "НОД(18, 24) = 6: общие делители 1, 2, 3, 6.",
+                "НОК(6, 8) = 24: кратные 6 — 6,12,18,24; кратные 8 — 8,16,24.",
+                "Для 12 и 18: НОД = 6, значит НОК = 12 · 18 ÷ 6 = 36."
+            )),
+            Lesson("Сокращение дробей", "Числитель и знаменатель можно разделить на одно и то же ненулевое число: a/b = (a:n)/(b:n).", listOf(
+                "18/24: делим на 6 → 3/4.",
+                "35/49: делим на 7 → 5/7.",
+                "42/63: делим на 21 → 2/3."
+            )),
+            Lesson("Сложение и вычитание дробей", "С одинаковыми знаменателями: a/c ± b/c = (a ± b)/c. С разными — сначала привести к общему знаменателю.", listOf(
+                "3/8 + 2/8 = 5/8.",
+                "5/6 − 1/3 = 5/6 − 2/6 = 3/6 = 1/2.",
+                "2/5 + 3/10 = 4/10 + 3/10 = 7/10."
+            )),
+            Lesson("Умножение дробей", "a/b · c/d = (a·c)/(b·d). Перед умножением удобно сокращать.", listOf(
+                "2/3 · 5/7 = 10/21.",
+                "4/9 · 3/8 = 12/72 = 1/6.",
+                "7/10 · 5/14: сокращаем 7 и 14, 5 и 10 → 1/4."
+            )),
+            Lesson("Деление дробей", "Чтобы разделить на дробь, нужно умножить на обратную: a/b : c/d = a/b · d/c.", listOf(
+                "3/4 : 2/5 = 3/4 · 5/2 = 15/8 = 1 7/8.",
+                "7/9 : 14/27 = 7/9 · 27/14 = 3/2 = 1 1/2.",
+                "5/6 : 10 = 5/6 · 1/10 = 1/12."
+            )),
+            Lesson("Проценты", "p% от числа A: A · p/100. Найти число по его p%: часть · 100/p. Процент изменения: изменение/начальное · 100%.", listOf(
+                "20% от 350 = 350 · 20/100 = 70.",
+                "Если 15% числа равны 45, то число = 45 · 100/15 = 300.",
+                "Цена выросла с 800 до 920: рост 120; 120/800 · 100% = 15%."
+            )),
+            Lesson("Отношение и пропорция", "Отношение a:b = a/b. Пропорция a/b = c/d, главное свойство: a·d = b·c.", listOf(
+                "3:5 = 3/5.",
+                "x/8 = 6/12 → 12x = 48 → x = 4.",
+                "5/7 = 15/x → 5x = 105 → x = 21."
+            )),
+            Lesson("Положительные и отрицательные числа", "При сложении чисел разных знаков вычитаем меньший модуль из большего и ставим знак числа с большим модулем. При умножении: одинаковые знаки дают +, разные — −.", listOf(
+                "−7 + 3 = −4.",
+                "−5 − 8 = −13.",
+                "(−6) · (−4) = 24, а (−6) · 4 = −24."
+            )),
+            Lesson("Уравнения", "Равенство сохраняется, если к обеим частям прибавить/вычесть одно число или обе части умножить/разделить на одно ненулевое число.", listOf(
+                "x + 7 = 19 → x = 19 − 7 = 12.",
+                "5x = 45 → x = 45 ÷ 5 = 9.",
+                "3x − 8 = 13 → 3x = 21 → x = 7."
+            )),
+            Lesson("Длина окружности и площадь круга", "Длина окружности: C = 2πr = πd. Площадь круга: S = πr². Обычно π ≈ 3,14.", listOf(
+                "r = 5 см: C = 2 · 3,14 · 5 = 31,4 см.",
+                "d = 12 см: C = 3,14 · 12 = 37,68 см.",
+                "r = 4 см: S = 3,14 · 4² = 3,14 · 16 = 50,24 см²."
+            )),
+            Lesson("Координатная плоскость", "Точка записывается (x; y): сначала движение по оси X, затем по оси Y. Четверти: I (+,+), II (−,+), III (−,−), IV (+,−).", listOf(
+                "A(3; 2): 3 вправо и 2 вверх — I четверть.",
+                "B(−4; 5): 4 влево и 5 вверх — II четверть.",
+                "C(2; −6): 2 вправо и 6 вниз — IV четверть."
+            ))
+        )),
+        Subject("Русский язык", "✍️", "Орфография, морфология и разборы: правило плюс понятные примеры.", listOf(
+            Lesson("НЕ с глаголами", "НЕ с глаголами обычно пишется раздельно. Слитно — если слово без НЕ не употребляется.", listOf("не знал, не пришёл, не сделал — раздельно.", "ненавидеть — без «не» слово не употребляется.", "Мне не хотелось уходить — «не» отдельно от глагола.")),
+            Lesson("-ТСЯ и -ТЬСЯ", "Задай вопрос к глаголу. Что делает? — -тся. Что делать? — -ться.", listOf("Он учится. Что делает? — учится.", "Нужно учиться. Что делать? — учиться.", "Девочка готовится выступать: готовится — что делает; выступать — что делать.")),
+            Lesson("Чередующиеся корни -лаг-/-лож-", "Перед Г пишется А: -лаг-. Перед Ж пишется О: -лож-. Исключение: полог.", listOf("предлагать — перед г пишем а.", "предложить — перед ж пишем о.", "излагать мысль, но изложить мысль.")),
+            Lesson("Пре- и при-", "ПРИ-: приближение, присоединение, неполнота действия, близость. ПРЕ-: очень или значение, близкое к «пере-».", listOf("приехать — приближение.", "приклеить — присоединение.", "прекрасный = очень красивый; преградить ≈ перегородить.")),
+            Lesson("И и Ы после Ц", "В корне после Ц обычно И: цифра. В окончаниях и суффиксах часто Ы: улицы, сестрицын. Исключения корней: цыган, цыплёнок, на цыпочках, цыкнуть, цыц.", listOf("цирк, цифра — и в корне.", "улицы — ы в окончании.", "цыплёнок — слово-исключение.")),
+            Lesson("Имя числительное", "Числительные обозначают число, количество или порядок при счёте. Количественные: пять. Порядковые: пятый.", listOf("Двадцать учеников — количественное.", "Шестой урок — порядковое.", "Три пятых — дробное числительное.")),
+            Lesson("Местоимение", "Местоимение указывает на предмет, признак или количество, но не называет их: я, ты, он, этот, мой, кто, никто.", listOf("Я читаю — личное местоимение.", "Моя тетрадь — притяжательное.", "Кто пришёл? — вопросительное.")),
+            Lesson("Морфемный разбор", "Порядок: окончание → основа → корень → приставка → суффикс. Однокоренные слова помогают найти корень.", listOf("подводный: окончание -ый, корень -вод-, приставка под-, суффикс -н-.", "лесник: нулевое окончание, корень лес-, суффикс -ник-.", "переписка: окончание -а, приставка пере-, корень -пис-, суффикс -к-.")),
+            Lesson("Однородные члены", "Однородные члены отвечают на один вопрос и относятся к одному слову. Без одиночных И/ИЛИ/ЛИБО между ними ставится запятая.", listOf("На столе лежали книги, тетради, ручки.", "Мы читали и обсуждали текст — запятая не нужна.", "Не только дождь, но и ветер мешал идти — запятая перед «но и»."))
+        )),
+        Subject("Английский язык", "🇬🇧", "Базовая грамматика 6 класса с простыми схемами и примерами.", listOf(
+            Lesson("Present Simple", "Утверждение: I/you/we/they + V; he/she/it + V-s. Вопрос: Do/Does + подлежащее + V? Отрицание: do/does not + V.", listOf("I play football every Sunday.", "She plays the piano.", "Does he like milk? — Yes, he does.")),
+            Lesson("Present Continuous", "am/is/are + V-ing. Используется для действия, которое происходит сейчас.", listOf("I am doing my homework now.", "They are playing outside.", "Is she reading? — No, she isn't.")),
+            Lesson("Past Simple", "Для правильных глаголов: V-ed. Для неправильных — 2-я форма. Вопрос/отрицание: did + V.", listOf("We visited London last year.", "He went to school at 8.", "Did you see Anna? — No, I didn't.")),
+            Lesson("Future Simple", "will + V. Вопрос: Will + подлежащее + V? Отрицание: will not (won't) + V.", listOf("I will call you tomorrow.", "They won't be late.", "Will she come? — Yes, she will.")),
+            Lesson("There is / There are", "There is — один предмет или неисчисляемое. There are — несколько предметов.", listOf("There is a book on the table.", "There are three windows in the room.", "Is there any water? — Yes, there is.")),
+            Lesson("Some / Any", "Some обычно в утверждениях. Any — в вопросах и отрицаниях. В просьбах/предложениях some тоже возможно.", listOf("I have some apples.", "Do you have any questions?", "There isn't any juice.")),
+            Lesson("Сравнение прилагательных", "Короткие: small → smaller → the smallest. Длинные: beautiful → more beautiful → the most beautiful. Исключения: good → better → the best.", listOf("A bike is faster than walking.", "This is the most interesting book.", "Today is better than yesterday.")),
+            Lesson("Can / Must / Should", "can — могу/умею; must — должен; should — следует. После модального глагола используется обычная форма глагола без to.", listOf("I can swim.", "You must wear a seat belt.", "You should drink more water."))
+        )),
+        Subject("Литература", "📚", "Термины и приёмы для анализа произведений и ответов на уроке.", listOf(
+            Lesson("Тема и главная мысль", "Тема — о чём произведение. Главная мысль (идея) — что автор хочет сказать читателю.", listOf("Рассказ о дружбе: тема — дружба; идея — друга узнают по поступкам.", "Стихотворение о природе: тема — осень; идея — красота перемен в природе.", "Военная повесть: тема — война; идея — цена мужества и мира.")),
+            Lesson("Эпитет", "Эпитет — образное определение, которое подчёркивает свойство предмета.", listOf("золотая осень", "серебряный голос", "мрачное небо")),
+            Lesson("Сравнение", "Сравнение сопоставляет один предмет с другим, часто со словами как, будто, словно, точно.", listOf("Снег блестит, как серебро.", "Облака словно корабли.", "Он быстрый, будто ветер.")),
+            Lesson("Метафора", "Метафора — скрытое сравнение, перенос свойства одного предмета на другой без слов «как/словно».", listOf("море огней", "лес рук", "время летит")),
+            Lesson("Жанры", "Рассказ — небольшое повествование; повесть — крупнее рассказа; роман — большое произведение со многими героями и линиями; басня — короткое поучительное произведение.", listOf("Короткий эпизод из жизни героя — рассказ.", "Несколько важных событий жизни героя — повесть.", "Басня часто заканчивается моралью.")),
+            Lesson("План характеристики героя", "1) Кто герой. 2) Внешность. 3) Поступки. 4) Речь и отношения с другими. 5) Черты характера. 6) Авторское и твоё отношение.", listOf("Смелость подтверждаем конкретным поступком героя.", "Доброту показываем через отношение к другим.", "Вывод: чему учит образ этого героя."))
+        )),
+        Subject("Биология", "🌿", "Клетка, растения, грибы и бактерии — ключевые понятия в коротком виде.", listOf(
+            Lesson("Клетка", "Клетка — основная структурная единица живого. Части растительной клетки: оболочка, мембрана, цитоплазма, ядро, вакуоль, пластиды.", listOf("Ядро хранит наследственную информацию.", "Хлоропласты содержат хлорофилл и участвуют в фотосинтезе.", "Вакуоль содержит клеточный сок и помогает поддерживать форму клетки.")),
+            Lesson("Фотосинтез", "На свету зелёные растения из воды и углекислого газа образуют органические вещества и выделяют кислород.", listOf("Лист получает углекислый газ через устьица.", "Корни поглощают воду из почвы.", "Без света интенсивность фотосинтеза резко падает.")),
+            Lesson("Корень", "Основные функции корня: закрепление растения, поглощение воды и минеральных солей, иногда запас веществ.", listOf("Корневые волоски увеличивают поверхность всасывания.", "Морковь запасает питательные вещества в корнеплоде.", "У дерева корни удерживают растение в почве.")),
+            Lesson("Побег и лист", "Побег состоит из стебля, листьев и почек. Лист выполняет фотосинтез, газообмен и испарение воды.", listOf("Почка может дать новый побег.", "Стебель проводит воду и вещества.", "Через устьица листа идёт газообмен.")),
+            Lesson("Цветок и плод", "Цветок — орган полового размножения покрытосеменных. После опыления и оплодотворения из завязи развивается плод, из семязачатка — семя.", listOf("Пчела переносит пыльцу — это опыление.", "Яблоко — плод, внутри находятся семена.", "Семя при подходящих условиях прорастает.")),
+            Lesson("Грибы", "Грибы — отдельное царство. Они не фотосинтезируют и питаются готовыми органическими веществами. Тело многих грибов образовано грибницей.", listOf("Шляпочный гриб имеет грибницу и плодовое тело.", "Дрожжи — одноклеточные грибы.", "Плесень может развиваться на продуктах во влажных условиях.")),
+            Lesson("Бактерии", "Бактерии — одноклеточные организмы без оформленного ядра. Среди них есть полезные, болезнетворные и разлагатели.", listOf("Молочнокислые бактерии используют для получения кисломолочных продуктов.", "Почвенные бактерии участвуют в круговороте веществ.", "Соблюдение гигиены снижает риск распространения болезнетворных бактерий."))
+        )),
+        Subject("География", "🌍", "Карта, координаты, оболочки Земли и основные природные процессы.", listOf(
+            Lesson("Масштаб", "Масштаб показывает, во сколько раз расстояние на карте меньше реального. Реальное расстояние = расстояние на карте × знаменатель масштаба.", listOf("1:100 000 означает: 1 см на карте = 1 км на местности.", "На карте 4 см при 1:50 000 → 4 × 0,5 км = 2 км.", "5 км при масштабе 1:100 000 будут изображены отрезком 5 см.")),
+            Lesson("Географические координаты", "Широта — расстояние от экватора к северу или югу. Долгота — от нулевого меридиана к востоку или западу.", listOf("Москва находится в Северном и Восточном полушариях.", "Экватор имеет широту 0°.", "Нулевой меридиан имеет долготу 0°.")),
+            Lesson("Литосфера", "Литосфера — твёрдая оболочка Земли, включающая земную кору и верхнюю часть мантии. Литосферные плиты медленно движутся.", listOf("На границах плит часто происходят землетрясения.", "Горы могут формироваться при столкновении плит.", "Вулканы часто приурочены к активным границам плит.")),
+            Lesson("Атмосфера", "Атмосфера — воздушная оболочка Земли. Основные элементы погоды: температура, давление, ветер, влажность, облачность и осадки.", listOf("Ветер движется из области высокого давления к низкому.", "Термометр измеряет температуру воздуха.", "Осадки бывают жидкими и твёрдыми.")),
+            Lesson("Гидросфера", "Гидросфера — все воды Земли: океаны, моря, реки, озёра, ледники, подземные воды и водяной пар.", listOf("Океаны содержат большую часть воды Земли.", "Река имеет исток, русло, притоки и устье.", "Вода непрерывно участвует в мировом круговороте.")),
+            Lesson("Рельеф", "Рельеф — совокупность неровностей земной поверхности. Главные формы: горы и равнины.", listOf("Низменности обычно до 200 м над уровнем моря.", "Горы имеют значительные перепады высот и крутые склоны.", "Высоту точки над уровнем моря называют абсолютной высотой.")),
+            Lesson("Природные зоны", "Природная зона — крупная территория с похожими климатом, почвами, растительностью и животным миром.", listOf("Тундра: холодно, многолетняя мерзлота, мхи и лишайники.", "Тайга: хвойные леса.", "Степь: травянистая растительность и плодородные чернозёмы."))
+        )),
+        Subject("История", "🏛️", "Хронология, Средневековье и Древняя Русь — опорные понятия для 6 класса.", listOf(
+            Lesson("Лента времени", "Год относится к веку так: 1–100 гг. — I век, 101–200 — II век. Для года, не оканчивающегося на 00, к первым цифрам прибавляют 1.", listOf("476 год — V век.", "988 год — X век.", "1200 год — XII век, а 1201 год — XIII век.")),
+            Lesson("Средневековое общество", "Средневековое общество часто делили на сословия: духовенство, знать и зависимые/свободные земледельцы и горожане.", listOf("Феодал владел землёй и мог иметь вассалов.", "Рыцарь относился к военному сословию знати.", "Города становились центрами ремесла и торговли.")),
+            Lesson("Феодальная лестница", "Вассал получал землю или покровительство от сеньора и нёс за это службу. Отношения строились на личной верности и обязанностях.", listOf("Король мог быть сеньором крупных феодалов.", "Рыцарь служил своему сеньору.", "Земельное владение, данное за службу, называли феодом.")),
+            Lesson("Древняя Русь", "Древнерусское государство сложилось вокруг важных торговых путей и княжеских центров. Киев стал одним из главных политических центров.", listOf("Князь управлял и возглавлял дружину.", "Дружина была военной опорой князя.", "Города были центрами ремесла, торговли и управления.")),
+            Lesson("Крещение Руси", "В 988 году князь Владимир принял христианство византийского обряда как государственную религию Руси.", listOf("Дата 988 год относится к X веку.", "Христианство усиливало культурные связи с Византией.", "Распространялись письменность, храмовое строительство и книжная культура.")),
+            Lesson("Раздробленность Руси", "В XII веке усилились отдельные княжества. Политическая раздробленность сочеталась с общей культурой, языком и династическими связями.", listOf("Княжества имели собственных князей.", "Между князьями происходили усобицы.", "При этом сохранялись торговые и культурные связи.")),
+            Lesson("Работа с историческим источником", "Нужно определить: кто создал источник, когда, о каком событии он сообщает, какова цель автора и насколько сведения могут быть субъективны.", listOf("Летопись отражает взгляд летописца и его времени.", "Монета может рассказать о правителе и экономике.", "Карта помогает увидеть территории и направления походов."))
+        )),
+        Subject("Информатика", "💻", "Информация, файлы, алгоритмы и основы двоичного представления.", listOf(
+            Lesson("Единицы информации", "1 байт = 8 бит. 1 Кбайт = 1024 байта. 1 Мбайт = 1024 Кбайт. 1 Гбайт = 1024 Мбайт.", listOf("16 бит = 2 байта.", "2048 байт = 2 Кбайт.", "3 Мбайт = 3 × 1024 = 3072 Кбайт.")),
+            Lesson("Объём текстовой информации", "В простых задачах: объём = количество символов × информационный вес одного символа.", listOf("100 символов по 8 бит = 800 бит = 100 байт.", "256 символов по 1 байту = 256 байт.", "2 048 символов по 1 байту = 2 Кбайт.")),
+            Lesson("Файлы и расширения", "Имя файла обычно состоит из имени и расширения после точки. Расширение помогает определить тип данных и программу для открытия.", listOf("photo.jpg — изображение.", "report.docx — текстовый документ.", "music.mp3 — аудиофайл.")),
+            Lesson("Алгоритм", "Алгоритм — точная и конечная последовательность команд для решения задачи. Свойства: понятность, дискретность, определённость, результативность.", listOf("Рецепт может быть примером бытового алгоритма.", "Алгоритм «найти максимум» сравнивает числа по шагам.", "Команды должны быть однозначными для исполнителя.")),
+            Lesson("Ветвление", "Ветвление выбирает действие по условию: ЕСЛИ условие, ТО действие 1, ИНАЧЕ действие 2.", listOf("Если идёт дождь — взять зонт, иначе — не брать.", "Если x > 0, вывести «положительное».", "Если пароль верный — открыть доступ, иначе — показать ошибку.")),
+            Lesson("Цикл", "Цикл повторяет команды несколько раз или пока выполняется условие.", listOf("Повторить 10 раз: вывести звёздочку.", "Пока есть непрочитанные строки — читать следующую.", "Для чисел от 1 до 5 вывести их квадраты.")),
+            Lesson("Двоичная система", "В двоичной системе используются только цифры 0 и 1. Разряды имеют веса 1, 2, 4, 8, 16…", listOf("101₂ = 1·4 + 0·2 + 1·1 = 5₁₀.", "111₂ = 4 + 2 + 1 = 7₁₀.", "10₁₀ = 8 + 2 → 1010₂."))
+        ))
+    )
 }
