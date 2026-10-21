@@ -8,11 +8,11 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.anihelper.release"
+        applicationId = "com.ruslan.school6"
         minSdk = 23
         targetSdk = 34
-        versionCode = 11
-        versionName = "1.1-agent"
+        versionCode = 1
+        versionName = "1.0"
     }
 
     compileOptions {
