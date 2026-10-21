@@ -1,9 +1,9 @@
-name: Build Signed APK
+name: Build School 6 APK
 
 on:
   push:
     branches:
-      - main
+      - school-6-apk
   workflow_dispatch:
 
 jobs:
@@ -23,7 +23,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Build Release APK
+      - name: Build release APK
         run: gradle assembleRelease
 
       - name: Find Android SDK build-tools
@@ -36,33 +36,31 @@ jobs:
       - name: Create signing key
         run: |
           keytool -genkeypair \
-            -keystore anihelper.jks \
-            -storepass anihelper2026 \
-            -keypass anihelper2026 \
-            -alias anihelper \
+            -keystore school6.jks \
+            -storepass school62026 \
+            -keypass school62026 \
+            -alias school6 \
             -keyalg RSA \
             -keysize 2048 \
             -validity 10000 \
-            -dname "CN=AniHelper, OU=Android, O=AniHelper, L=Moscow, C=RU"
+            -dname "CN=School6, OU=Android, O=School6, L=Moscow, C=RU"
 
       - name: Sign APK
         shell: bash
         run: |
           UNSIGNED_APK=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
           "${{ steps.buildtools.outputs.path }}/zipalign" -f -p 4 "$UNSIGNED_APK" aligned.apk
-
           "${{ steps.buildtools.outputs.path }}/apksigner" sign \
-            --ks anihelper.jks \
-            --ks-key-alias anihelper \
-            --ks-pass pass:anihelper2026 \
-            --key-pass pass:anihelper2026 \
-            --out AniHelper.apk \
+            --ks school6.jks \
+            --ks-key-alias school6 \
+            --ks-pass pass:school62026 \
+            --key-pass pass:school62026 \
+            --out School6.apk \
             aligned.apk
+          "${{ steps.buildtools.outputs.path }}/apksigner" verify --verbose School6.apk
 
-          "${{ steps.buildtools.outputs.path }}/apksigner" verify --verbose AniHelper.apk
-
-      - name: Upload AniHelper APK
+      - name: Upload School6 APK
         uses: actions/upload-artifact@v4
         with:
-          name: AniHelper-APK
-          path: AniHelper.apk
+          name: School6-APK
+          path: School6.apk
