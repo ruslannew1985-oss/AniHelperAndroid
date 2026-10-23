@@ -8,7 +8,7 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.ruslan.school6"
+        applicationId = "com.ruslan.school9"
         minSdk = 23
         targetSdk = 34
         versionCode = 1
