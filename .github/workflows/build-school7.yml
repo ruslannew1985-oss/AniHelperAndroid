@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - feature/grade7-resh7-apk
+      - main
     paths:
       - 'school7/**'
       - '.github/workflows/build-school7.yml'
