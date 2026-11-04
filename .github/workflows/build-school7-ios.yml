@@ -6,6 +6,10 @@ on:
     paths:
       - .github/workflows/build-school7-ios.yml
       - school7/source.tar.xz.b64
+  pull_request:
+    paths:
+      - .github/workflows/build-school7-ios.yml
+      - school7/source.tar.xz.b64
   workflow_dispatch:
 
 jobs:
