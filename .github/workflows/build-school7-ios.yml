@@ -1,0 +1,146 @@
+name: Build grade 7 iPhone (unsigned IPA)
+on:
+  push:
+    branches:
+      - feature/grade7-resh7-apk
+    paths:
+      - .github/workflows/build-school7-ios.yml
+      - school7/source.tar.xz.b64
+  workflow_dispatch:
+
+jobs:
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build iOS app without Apple signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Xcode:" && xcodebuild -version
+          mkdir -p school7/android_source school7/iosbuild/iOS/Assets.xcassets/AppIcon.appiconset school7/iosbuild/Web
+          base64 -d school7/source.tar.xz.b64 | tar -xJf - -C school7/android_source
+          cp school7/android_source/app/src/main/assets/index.html school7/iosbuild/Web/
+          cp school7/android_source/app/src/main/assets/lessons.js school7/iosbuild/Web/
+          cat > school7/iosbuild/iOS/Reshebnik7App.swift <<'SWIFT'
+          import SwiftUI
+          import WebKit
+          
+          @main
+          struct Reshebnik7App: App {
+            var body: some Scene {
+              WindowGroup {
+                StudyWebView().preferredColorScheme(.dark).ignoresSafeArea(.container, edges: .bottom)
+              }
+            }
+          }
+          
+          struct StudyWebView: UIViewRepresentable {
+            func makeCoordinator() -> Coordinator { Coordinator() }
+            func makeUIView(context: Context) -> WKWebView {
+              let config = WKWebViewConfiguration()
+              config.websiteDataStore = .default()
+              config.userContentController.add(context.coordinator, name: "saveProgress")
+              let web = WKWebView(frame: .zero, configuration: config)
+              web.isOpaque = false
+              web.backgroundColor = UIColor(red: 15/255, green: 17/255, blue: 39/255, alpha: 1)
+              web.scrollView.backgroundColor = web.backgroundColor
+              web.scrollView.contentInsetAdjustmentBehavior = .never
+              web.navigationDelegate = context.coordinator
+              if let file = Bundle.main.url(forResource: "index", withExtension: "html", subdirectory: "Web") {
+                web.loadFileURL(file, allowingReadAccessTo: file.deletingLastPathComponent())
+              }
+              return web
+            }
+            func updateUIView(_ uiView: WKWebView, context: Context) {}
+            final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+              let defaults = UserDefaults.standard
+              func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+                let saved: [String:[String]] = [
+                  "favorites": defaults.stringArray(forKey: "favorites_7") ?? [],
+                  "done": defaults.stringArray(forKey: "done_7") ?? []
+                ]
+                guard let data = try? JSONSerialization.data(withJSONObject: saved),
+                      let json = String(data: data, encoding: .utf8) else { return }
+                let script = """
+                (function(){
+                  const saved = \(json);
+                  favorites = new Set(saved.favorites||[]);
+                  done = new Set(saved.done||[]);
+                  store = function() {
+                    window.webkit.messageHandlers.saveProgress.postMessage({favorites:[...favorites],done:[...done]});
+                  };
+                  render();
+                })();
+                """
+                webView.evaluateJavaScript(script, completionHandler: nil)
+              }
+              func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+                guard message.name == "saveProgress", let data = message.body as? [String:Any] else { return }
+                if let arr = data["favorites"] as? [String] { defaults.set(arr, forKey:"favorites_7") }
+                if let arr = data["done"] as? [String] { defaults.set(arr, forKey:"done_7") }
+              }
+            }
+          }
+          SWIFT
+          cat > school7/iosbuild/project.yml <<'SPEC'
+          name: Reshebnik7
+          options:
+            bundleIdPrefix: ru.amo
+          targets:
+            Reshebnik7:
+              type: application
+              platform: iOS
+              deploymentTarget: "16.0"
+              sources:
+                - path: iOS
+                - path: Web
+                  type: folder
+                  buildPhase: resources
+              settings:
+                base:
+                  PRODUCT_BUNDLE_IDENTIFIER: ru.amo.resh7ios
+                  GENERATE_INFOPLIST_FILE: YES
+                  INFOPLIST_KEY_CFBundleDisplayName: "Решебник 7 класс"
+                  INFOPLIST_KEY_UIUserInterfaceStyle: Dark
+                  ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+                  SWIFT_VERSION: "5.0"
+                  CODE_SIGN_STYLE: Automatic
+          SPEC
+          cat > school7/iosbuild/iOS/Assets.xcassets/AppIcon.appiconset/Contents.json <<'ICONJSON'
+          {"images":[{"filename":"AppIcon.png","idiom":"universal","platform":"ios","size":"1024x1024"}],"info":{"author":"xcode","version":1}}
+          ICONJSON
+          cat > icon.swift <<'ICON'
+          import AppKit
+          let s=NSSize(width:1024,height:1024)
+          let img=NSImage(size:s)
+          img.lockFocus()
+          NSColor(calibratedRed:0.25,green:0.16,blue:0.58,alpha:1).setFill()
+          NSBezierPath(roundedRect:NSRect(origin:.zero,size:s),xRadius:225,yRadius:225).fill()
+          let text="7" as NSString
+          let attrs:[NSAttributedString.Key:Any]=[
+           .font: NSFont.systemFont(ofSize:690,weight:.heavy),
+           .foregroundColor: NSColor.white,
+           .paragraphStyle: NSParagraphStyle.default
+          ]
+          text.draw(in:NSRect(x:270,y:110,width:520,height:750),withAttributes:attrs)
+          img.unlockFocus()
+          if let tiff=img.tiffRepresentation,let bmp=NSBitmapImageRep(data:tiff),let png=bmp.representation(using:.png,properties:[:]){
+           try png.write(to:URL(fileURLWithPath:"school7/iosbuild/iOS/Assets.xcassets/AppIcon.appiconset/AppIcon.png"))
+          }
+          ICON
+          swift icon.swift
+          if ! command -v xcodegen >/dev/null 2>&1; then brew install xcodegen; fi
+          cd school7/iosbuild
+          xcodegen generate
+          xcodebuild -project Reshebnik7.xcodeproj -scheme Reshebnik7 -sdk iphoneos -configuration Release -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/Reshebnik7.app Payload/
+          zip -yqr Reshebnik7-unsigned.ipa Payload
+          ls -lh Reshebnik7-unsigned.ipa
+      - name: Upload IPA for personal signing
+        uses: actions/upload-artifact@v4
+        with:
+          name: Reshebnik7-iPhone-UnsignedIPA
+          path: school7/iosbuild/Reshebnik7-unsigned.ipa
+          if-no-files-found: error
