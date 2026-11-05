@@ -1,0 +1,43 @@
+name: Publish Reshebnik 7 iPhone website
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'iphone7/**'
+      - '.github/workflows/publish-iphone7.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "github-pages"
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Prepare iPhone site
+        run: |
+          mkdir -p _site
+          cp -R iphone7 _site/iphone7
+          cat > _site/index.html <<'EOF'
+          <!doctype html><html lang="ru"><meta charset="utf-8"><title>Решебник 7 класс</title><meta http-equiv="refresh" content="0;url=./iphone7/"><a href="./iphone7/">Открыть Решебник 7 класс</a></html>
+          EOF
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+      - name: Upload Pages files
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+      - name: Deploy website
+        id: deployment
+        uses: actions/deploy-pages@v4
