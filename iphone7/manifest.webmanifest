@@ -1,0 +1,19 @@
+{
+  "name": "Решебник 7 класс — формулы и решения",
+  "short_name": "Решебник 7",
+  "description": "99 тем, 297 разобранных примеров по алгебре, геометрии, физике, русскому и английскому",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0f1127",
+  "theme_color": "#0f1127",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
