@@ -1,0 +1,50 @@
+name: Build grade 7 APK
+on:
+  push:
+    branches:
+      - feature/grade7-resh7-apk
+      - main
+    paths:
+      - 'school7/**'
+      - '.github/workflows/build-school7.yml'
+  pull_request:
+    paths:
+      - 'school7/**'
+      - '.github/workflows/build-school7.yml'
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Extract standalone Android project
+        run: |
+          mkdir -p school7/project
+          base64 -d school7/source.tar.xz.b64 | tar -xJf - -C school7/project
+      - name: Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android platform using runner SDK
+        run: |
+          set -euxo pipefail
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)"
+          test -n "$SDKMANAGER"
+          "$SDKMANAGER" --version
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
+      - name: Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Build debug APK
+        working-directory: school7/project
+        run: gradle assembleDebug --no-daemon --stacktrace
+      - name: Upload installable APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Reshebnik7-APK
+          path: school7/project/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
